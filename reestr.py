@@ -397,7 +397,7 @@ def start_browser(download_path):
     print(colored('Запускаем Firefox', color='green'))
 
     options = Options()
-    #options.headless = True
+    options.headless = True
     options.set_preference("browser.download.folderList",2)
     options.set_preference("browser.download.manager.showWhenStarting", False)
     options.set_preference("browser.download.dir", download_path)
