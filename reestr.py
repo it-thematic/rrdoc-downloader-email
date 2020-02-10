@@ -32,12 +32,13 @@ arguments_parser.add_argument('--to_date', help=f'''конечная дата п
 arguments_parser.add_argument('--out_dir', help='Каталог, в который будут складываться скачанные файлы', action='store')
 arguments = arguments_parser.parse_args()
 
+out_dir = os.path.abspath(arguments.out_dir)
+
 # От кого будем искать письма, захардкодим значение
 email_from = 'portal@rosreestr.ru'
 # ключик рукапчи
 rucaptcha_key = '8433ba8b9b3f97f8b017eff242df2531'
 
-print(arguments)
 
 sys.path.append('./bin/')
 sys.path.append('./bin/firefox/')
@@ -189,7 +190,6 @@ class ImapSession:
         if from_addr is not None:
             commands.append(f'(FROM "{from_addr}")')
 
-        print(commands)
         self.ids_messages.clear()
 
         print(colored(message, color='cyan'))
@@ -397,7 +397,7 @@ def start_browser(download_path):
     print(colored('Запускаем Firefox', color='green'))
 
     options = Options()
-    options.headless = True
+    #options.headless = True
     options.set_preference("browser.download.folderList",2)
     options.set_preference("browser.download.manager.showWhenStarting", False)
     options.set_preference("browser.download.dir", download_path)
@@ -405,6 +405,123 @@ def start_browser(download_path):
     browser = webdriver.Firefox(options=options)
     browser.set_page_load_timeout(120)
     return browser
+
+
+def parse_link(browser, result, email):
+    while True:
+        # загружаем страницу
+        print(colored(f'{email}: загружаем {result["download_url"]}', color='green'))
+        try:
+            browser.get(result['download_url'])
+        except:
+            print(colored('Произошла ошибка при загрузке страницы! Вероятно браузер умер',
+                          color='red'))
+            continue
+
+        # Ищем элемент с капчей
+        try:
+            image_elements = browser.find_elements_by_tag_name('img')
+        except:
+            print(colored('Не удалось найти элемент капчи', color='red'))
+            continue
+
+        else:
+            for image_element in image_elements:
+                try:
+                    src_attr = image_element.get_attribute('src')
+                except:
+                    print(colored('Не удалось получить информацию о капче', color='red'))
+                else:
+                    if 'captcha' in src_attr.lower():
+                        captcha_element = image_element
+                        break
+            else:
+                print(colored('На странице не обнаружена капча', color='red'))
+                continue
+
+            # нашли элемент с капчей, сохраняем его куда-нибудь
+            captcha_file_dst = f'/tmp/{str(uuid.uuid4())}.png'
+            captcha_element.screenshot(captcha_file_dst)
+            print(colored(f'{email}: отсылаем капчу на решение', color='cyan'))
+            user_answer = ImageCaptcha.ImageCaptcha(rucaptcha_key=rucaptcha_key).captcha_handler(captcha_file=captcha_file_dst)
+            os.remove(captcha_file_dst)
+            if not user_answer['error']:
+                captcha_code = user_answer['captchaSolve']
+                print(colored(f'{email}: получен код капчи "{captcha_code}"', color='green'))
+            else:
+                print(colored(f'{email}: не удалось решит капчу, пробуем заново', color='yellow'))
+                continue
+
+            print(colored(f'{email}: вводим капчу в форму', color='cyan'))
+            try:
+                captcha_form = browser.find_element_by_name('captchaText')
+            except:
+                print(colored(f'{email}: не удалось найти форму для ввода капчи'))
+                continue
+            else:
+                captcha_form.send_keys(captcha_code)
+
+            try:
+                browser.find_element_by_class_name('terminal-button-light').click()
+            except:
+                print(colored(f'{email}: не удалось найти кнопку для отправки капчи', color='red'))
+                continue
+            else:
+                time.sleep(2)
+
+            try:
+                a_elements = browser.find_elements_by_tag_name('a')
+            except:
+                print(colored(f'{email}: не удалось найти кнопку для ввода ключа'))
+                continue
+            else:
+                for element in a_elements:
+                    attribute = element.get_attribute('onclick')
+                    if attribute is not None:
+                        if 'setAccessType' in attribute:
+                            access_key_button = element
+                            try:
+                                access_key_button.click()
+                            except:
+                                print(colored(f'{email}: не удалось обработать ключ'))
+                            break
+                else:
+                    print(colored(f'{email}: не удалось найти кнопку для ввода ключа'))
+                    continue
+
+        try:
+            access_key_form = browser.find_element_by_name('accessKey')
+        except:
+            print(colored(f'{email}: не удалось найти форму для ввода ключа', color='green'))
+            continue
+
+        print(colored(f'{email}: вводим ключ {result["key"]} в форму', color='cyan'))
+        access_key_form.send_keys(result.get('key'))
+        try:
+            get_file_buttons = browser.find_elements_by_class_name('terminal-button-light')
+        except:
+            print(colored(f'{email}: не удалось найти кнопку для скачивания файла', color='green'))
+            continue
+        else:
+            current_files = get_current_list_of_files(out_dir)
+            for element in get_file_buttons:
+                if 'файл' in element.text:
+                    print(colored(f'{email}: загружаем файл', color='cyan'))
+                    print(colored(f'{email}: ожидаем окончание загрузки файла', color='cyan'))
+                    try:
+                        element.click()
+                    except:
+                        print(colored(f'{email}: не удалось скачать файл'))
+                        continue
+                    time.sleep(15)
+                    break
+            else:
+                print(colored(f'{email}: не удалось найти кнопку для скачивания файла', color='green'))
+                continue
+
+        return calculate_new_files_in_dir(current_files, out_dir)
+
+    return None
 
 
 def parse_message(message_body, message_subject):
@@ -424,6 +541,14 @@ def parse_message(message_body, message_subject):
         # ключ доступа
         'key': None
     }
+    true_subject = ['документ по заявлению', 'заявление выполнено']
+    for subj in true_subject:
+        if subj in message_subject:
+            break
+        else:
+            print(colored('Не используем это сообщение, не соответствует запросу', color='yellow'))
+            return result
+
     # не очень красивые регулярки, увы
     application_number = re.search('\(\S+\)', str(message_subject))
     if application_number is not None:
@@ -455,7 +580,6 @@ def parse_message(message_body, message_subject):
                 result['key'] = key
             else:
                 print('Не удалось распарсить ключ!')
-                import ipdb ; ipdb.set_trace()
                 return
     try:
         reg_date = re.findall('\d\d.\d\d.\d\d\d\d', str(message_body))[1]
@@ -516,7 +640,6 @@ def main():
         else:
             to_date = None
         imap_session = ImapSession(email, password, 'imap.yandex.ru', 993)
-        out_dir = os.path.abspath(arguments.out_dir)
         if out_dir is not None:
             if not os.path.isdir(out_dir):
                 print(colored(f'Каталог для загрузки файлов не найден, создаём каталог {out_dir}', color='yellow'))
@@ -549,124 +672,16 @@ def main():
       ссылка для доступа: {colored(result["download_url"], color="green")}, 
       ключ для доступа: {colored(result["key"], color="green")}
                                               ''')
-                                while True:
-                                    # загружаем страницу
-                                    print(colored(f'{email}: загружаем {result["download_url"]}', color='green'))
-                                    try:
-                                        browser.get(result['download_url'])
-                                    except:
-                                        print(colored('Произошла ошибка при загрузке страницы! Вероятно браузер умер',
-                                                      color='red'))
-                                        browser.quit()
-                                        sys.exit(1)
 
-                                    while True:
-                                        # Ищем элемент с капчей
-                                        try:
-                                            image_elements = browser.find_elements_by_tag_name('img')
-                                        except:
-                                            print(colored('Не удалось найти элемент капчи', color='red'))
-                                            browser.quit()
-                                            sys.exit(1)
-                                        else:
-                                            for image_element in image_elements:
-                                                try:
-                                                    src_attr = image_element.get_attribute('src')
-                                                except:
-                                                    print(colored('Не удалось получить информацию о капче', color='red'))
-                                                else:
-                                                    if 'captcha' in src_attr.lower():
-                                                        captcha_element = image_element
-                                                        break
-                                            else:
-                                                print(colored('На странице не обнаружена капча', color='red'))
-                                                break
-
-                                            # нашли элемент с капчей, сохраняем его куда-нибудь
-                                            captcha_file_dst = f'/tmp/{str(uuid.uuid4())}.png'
-                                            captcha_element.screenshot(captcha_file_dst)
-                                            print(colored(f'{email}: отсылаем капчу на решение', color='cyan'))
-                                            user_answer = ImageCaptcha.ImageCaptcha(rucaptcha_key=rucaptcha_key).captcha_handler(captcha_file=captcha_file_dst)
-                                            if not user_answer['error']:
-                                                captcha_code = user_answer['captchaSolve']
-                                                print(colored(f'{email}: получен код капчи "{captcha_code}"', color='green'))
-                                            else:
-                                                print(colored(f'{email}: не удалось решит капчу, пробуем заново', color='yellow'))
-                                                continue
-
-                                            print(colored(f'{email}: вводим капчу в форму', color='cyan'))
-                                            try:
-                                                captcha_form = browser.find_element_by_name('captchaText')
-                                            except:
-                                                print(colored(f'{email}: не удалось найти форму для ввода капчи'))
-                                                break
-                                            else:
-                                                captcha_form.send_keys(captcha_code)
-
-                                            try:
-                                                browser.find_element_by_class_name('terminal-button-light').click()
-                                            except:
-                                                print(colored(f'{email}: не удалось найти кнопку для отправки капчи', color='red'))
-                                                continue
-                                            else:
-                                                time.sleep(2)
-
-                                            try:
-                                                a_elements = browser.find_elements_by_tag_name('a')
-                                            except:
-                                                print(colored(f'{email}: не удалось найти кнопку для ввода ключа'))
-                                                continue
-                                            else:
-                                                for element in a_elements:
-                                                    attribute = element.get_attribute('onclick')
-                                                    if attribute is not None:
-                                                        if 'setAccessType' in attribute:
-                                                            access_key_button = element
-                                                            access_key_button.click()
-                                                            break
-                                                else:
-                                                    print(colored(f'{email}: не удалось найти кнопку для ввода ключа'))
-                                                    continue
-
-                                            break
-                                    try:
-                                        access_key_form = browser.find_element_by_name('accessKey')
-                                    except:
-                                        print(colored(f'{email}: не удалось найти форму для ввода ключа', color='green'))
-                                        continue
-
-                                    print(colored(f'{email}: вводим ключ {result["key"]} в форму', color='cyan'))
-                                    access_key_form.send_keys(result.get('key'))
-                                    try:
-                                        get_file_buttons = browser.find_elements_by_class_name('terminal-button-light')
-                                    except:
-                                        print(colored(f'{email}: не удалось найти кнопку для скачивания файла', color='green'))
-                                        continue
-                                    else:
-                                        current_files = get_current_list_of_files(out_dir)
-                                        for element in get_file_buttons:
-                                            if 'файл' in element.text:
-                                                print(colored(f'{email}: загружаем файл', color='cyan'))
-                                                print(colored(f'{email}: ожидаем окончание загрузки файла', color='cyan'))
-                                                try:
-                                                    element.click()
-                                                except:
-                                                    print(colored(f'{email}: не удалось скачать файл'))
-                                                    continue
-                                                time.sleep(15)
-                                                break
-                                        else:
-                                            print(colored(f'{email}: не удалось найти кнопку для скачивания файла', color='green'))
-                                            continue
-
-                                    new_file = calculate_new_files_in_dir(current_files, out_dir)
-                                    print(colored(f'{email}: загружен файл {new_file}'))
-                                    try:
+                                    new_file = parse_link(browser, result, email)
+                                    if new_file is not None:
+                                        print(colored(f'{email}: загружен файл {new_file}'))
                                         log_file.write(f'{str(datetime.datetime.now())},{email},{result["application_number"]},{result["reg_date"]},{result["download_url"]},{result["key"]},{out_dir + "/" + new_file}\n')
-                                    except:
-                                        import ipdb ; ipdb.set_trace()
-                                    log_file.flush()
-                                    break
+                                        log_file.flush()
+
+                                    else:
+                                        print(colored(f'{email}: не удалось обработать ссылку', color='red'))
+
 
                     browser.quit()
                     imap_session.logout()
