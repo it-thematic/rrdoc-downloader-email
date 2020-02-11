@@ -340,6 +340,13 @@ class ImapSession:
                     print(colored(message, color='red'))
                     return False
 
+    def reconnect(self):
+        print(colored(f'{self.email}: переподключаемся к серверу', color='red'))
+        if self.connect():
+            if self.move_to_folder('inbox'):
+                return True
+        return False
+
     def load_message(self, message_id):
         '''
         Загружаем хидеры _одного_ сообщения
@@ -352,6 +359,10 @@ class ImapSession:
         except Exception as error:
             message = f'{self.email}: загрузка сообщения не удалась, подробная информация: "{error}"'
             print(colored(message, color='red'))
+            # переподключаемся в случае ошибки
+            if self.reconnect():
+                return self.load_message(message_id)
+
             return False
 
         else:
@@ -404,12 +415,17 @@ def start_browser(download_path):
     options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/octet-stream,application/vnd.ms-excel,application/zip,application/x-zip-compressed")
     browser = webdriver.Firefox(options=options)
     browser.set_page_load_timeout(120)
+    # устанавливаем размер экрана чуть больше чем обычно - иногда элементы на которые нужно кликнуть - не показываются
+    # на странице и происходит ошибка
+    browser.set_window_size(1920, 1080)
     return browser
 
 
 def parse_link(browser, result, email):
-    while True:
+    count, max_count = 0, 4
+    while count < max_count:
         # загружаем страницу
+        count += 1
         print(colored(f'{email}: загружаем {result["download_url"]}', color='green'))
         try:
             browser.get(result['download_url'])
@@ -505,7 +521,12 @@ def parse_link(browser, result, email):
         else:
             current_files = get_current_list_of_files(out_dir)
             for element in get_file_buttons:
-                if 'файл' in element.text:
+                try:
+                    element_text = element.text
+                except:
+                    continue
+
+                if 'файл' in element_text:
                     print(colored(f'{email}: загружаем файл', color='cyan'))
                     print(colored(f'{email}: ожидаем окончание загрузки файла', color='cyan'))
                     try:
@@ -521,6 +542,7 @@ def parse_link(browser, result, email):
 
         return calculate_new_files_in_dir(current_files, out_dir)
 
+    print(colored(f'{email}: количество попыток обработать письмо достигло максимума'))
     return None
 
 
