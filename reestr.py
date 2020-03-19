@@ -21,6 +21,12 @@ from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
 from selenium.webdriver.firefox.options import Options
 from termcolor import colored
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+BASE_DIR = os.path.dirname(os.path.realpath(__file__))
+
 arguments_parser = argparse.ArgumentParser()
 arguments_parser.add_argument('--email', help='Почта', action='store')
 arguments_parser.add_argument('--password', help='Пароль для почты', action='store')
@@ -41,7 +47,7 @@ out_dir = os.path.abspath(arguments.out_dir)
 # От кого будем искать письма, захардкодим значение
 email_from = 'portal@rosreestr.ru'
 # ключик рукапчи
-rucaptcha_key = '8433ba8b9b3f97f8b017eff242df2531'
+rucaptcha_key =os.getenv('captcha_token', '8433ba8b9b3f97f8b017eff242df2531')
 
 
 #
