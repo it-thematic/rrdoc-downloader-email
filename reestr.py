@@ -1,32 +1,36 @@
 #!/usr/bin/env python3
 # coding = utf-8
 
-import re
-import os
-import sys
-import bs4
+import argparse
 import copy
+import datetime
+import email
+import imaplib
+import os
+import re
+import sys
+import tempfile
 import time
 import uuid
-import email
-import logging
-import imaplib
-import argparse
-import datetime
-from termcolor import colored
-from selenium import webdriver
 from email.header import decode_header
+
+import bs4
 from python_rucaptcha import ImageCaptcha
+from selenium import webdriver
+from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
 from selenium.webdriver.firefox.options import Options
+from termcolor import colored
 
 arguments_parser = argparse.ArgumentParser()
 arguments_parser.add_argument('--email', help='Почта', action='store')
 arguments_parser.add_argument('--password', help='Пароль для почты', action='store')
 arguments_parser.add_argument('--only_read', help='Обрабатываем только прочитанные письма', action='store_true')
-arguments_parser.add_argument('--only_unread', help=f'''Обрабатываем только непрочитанные письма. {colored('Важно!', color='red')} 
+arguments_parser.add_argument('--only_unread',
+                              help=f'''Обрабатываем только непрочитанные письма. {colored('Важно!', color='red')} 
 Если ни один из параметров --only-read или --only-unread не указан, то будет обрабатываться вся почта''',
                               action='store_true')
 arguments_parser.add_argument('--from_date', help='начальная дата письма')
+arguments_parser.add_argument('--number', help='номера заявок росреестра')
 arguments_parser.add_argument('--to_date', help=f'''конечная дата письма. {colored('Важно!', color='red')}
 Если даты не будут указаны, обрабатываться будет вся почта''')
 arguments_parser.add_argument('--out_dir', help='Каталог, в который будут складываться скачанные файлы', action='store')
@@ -40,20 +44,22 @@ email_from = 'portal@rosreestr.ru'
 rucaptcha_key = '8433ba8b9b3f97f8b017eff242df2531'
 
 
-sys.path.append('./bin/')
-sys.path.append('./bin/firefox/')
+#
+# sys.path.append('./bin/')
+# sys.path.append('./bin/firefox/')
 
-if not os.path.isfile('./bin/geckodriver'):
-    print(colored('Не найден geckodriver!', color='red'))
+# if not os.path.isfile('./bin/geckodriver'):
+#     print(colored('Не найден geckodriver!', color='red'))
+
 
 # ! Используем системный firefox
-#if not os.path.isfile('./bin/firefox/firefox'):
+# if not os.path.isfile('./bin/firefox/firefox'):
 #    print(colored('Не найден исполняемый файл firefox!', color='red'))
 
 
 class ImapSession:
     def __init__(self, email, password,
-                 imap_host, imap_port):
+                 imap_host, imap_port, domain=None):
         self.email, self.password = email, password
         self.imap_host, self.imap_port = imap_host, imap_port
         #
@@ -70,6 +76,7 @@ class ImapSession:
         self.message_headers = None
         self.html_message = None
         self.subject = None
+        self.domain = domain
 
     def _search_folder(self, folder_name):
         try:
@@ -195,7 +202,10 @@ class ImapSession:
         print(colored(message, color='cyan'))
 
         try:
-            code, messages = self.connection.search(None, ' '.join(commands))
+            if self.domain and self.domain == 'mail':
+                code, messages = self.connection.search(None, 'ALL')
+            else:
+                code, messages = self.connection.search(None, ' '.join(commands))
         except Exception as error:
             message = f'{self.email}: произошла ошибка при поиске непрочитанных писем, подробная информация: {error}'
             print(colored(message, color='red'))
@@ -243,7 +253,7 @@ class ImapSession:
     def delete_message(self, message_id):
         print(colored(f'{self.email}: удаляем сообщение {message_id.decode("utf-8")}', color='cyan'))
         try:
-            status, info = self.connection.store(message_id,  '+FLAGS', '\\Deleted')
+            status, info = self.connection.store(message_id, '+FLAGS', '\\Deleted')
         except Exception as error:
             message = f'{self.email}: произошла ошибка при удалении письма, подробная информация: {error}'
             print(colored(message, color='red'))
@@ -377,7 +387,8 @@ class ImapSession:
                     self.content = self.message.get_payload(decode=True)
                     message = f'{self.email}: сообщение загружено'
                     try:
-                        self.html_message = self.message.get_payload(0).get_payload(1).get_payload(decode=True).decode('utf-8')
+                        self.html_message = self.message.get_payload(0).get_payload(1).get_payload(decode=True).decode(
+                            'utf-8')
                     except:
                         print(f'{self.email}: не удалось распарсить тело сообщения')
                         return False
@@ -409,11 +420,13 @@ def start_browser(download_path):
 
     options = Options()
     options.headless = True
-    options.set_preference("browser.download.folderList",2)
+    options.set_preference("browser.download.folderList", 2)
     options.set_preference("browser.download.manager.showWhenStarting", False)
     options.set_preference("browser.download.dir", download_path)
-    options.set_preference("browser.helperApps.neverAsk.saveToDisk", "application/octet-stream,application/vnd.ms-excel,application/zip,application/x-zip-compressed")
-    browser = webdriver.Firefox(options=options)
+    if sys.platform != 'win32':
+        options.set_preference("browser.helperApps.neverAsk.saveToDisk",
+                           "application/octet-stream,application/vnd.ms-excel,application/zip,application/x-zip-compressed")
+        browser = webdriver.Firefox(options=options, executable_path='c:\\GECKoDRIVER\\geckodriver.exe')
     browser.set_page_load_timeout(120)
     # устанавливаем размер экрана чуть больше чем обычно - иногда элементы на которые нужно кликнуть - не показываются
     # на странице и происходит ошибка
@@ -456,17 +469,18 @@ def parse_link(browser, result, email):
                 continue
 
             # нашли элемент с капчей, сохраняем его куда-нибудь
-            captcha_file_dst = f'/tmp/{str(uuid.uuid4())}.png'
+            captcha_file_dst = os.path.join(tempfile.mkdtemp(), f'{str(uuid.uuid4())}.png')
             captcha_element.screenshot(captcha_file_dst)
             print(colored(f'{email}: отсылаем капчу на решение', color='cyan'))
-            user_answer = ImageCaptcha.ImageCaptcha(rucaptcha_key=rucaptcha_key).captcha_handler(captcha_file=captcha_file_dst)
-            os.remove(captcha_file_dst)
+            user_answer = ImageCaptcha.ImageCaptcha(rucaptcha_key=rucaptcha_key).captcha_handler(
+                captcha_file=captcha_file_dst)
+
             if not user_answer['error']:
                 captcha_code = user_answer['captchaSolve']
                 print(colored(f'{email}: получен код капчи "{captcha_code}"', color='green'))
             else:
                 print(colored(f'{email}: не удалось решит капчу, пробуем заново', color='yellow'))
-                continue
+                break
 
             print(colored(f'{email}: вводим капчу в форму', color='cyan'))
             try:
@@ -529,11 +543,17 @@ def parse_link(browser, result, email):
                 if 'файл' in element_text:
                     print(colored(f'{email}: загружаем файл', color='cyan'))
                     print(colored(f'{email}: ожидаем окончание загрузки файла', color='cyan'))
-                    try:
-                        element.click()
-                    except:
-                        print(colored(f'{email}: не удалось скачать файл'))
-                        continue
+                    i = 0
+                    while i < 5:
+                        try:
+                            print(f'try = {i}')
+                            element.click()
+                        except:
+                            print(colored(f'{email}: не удалось скачать файл'))
+                            i += 1
+                            continue
+                        else:
+                            break
                     time.sleep(15)
                     break
             else:
@@ -564,12 +584,16 @@ def parse_message(message_body, message_subject):
         'key': None
     }
     true_subject = ['документ по заявлению', 'заявление выполнено']
-    for subj in true_subject:
-        if subj in message_subject:
-            break
-        else:
-            print(colored('Не используем это сообщение, не соответствует запросу', color='yellow'))
-            return result
+    if not true_subject[0] in message_subject and true_subject[1] in message_subject:
+        print(colored('Не используем это сообщение, не соответствует запросу', color='yellow'))
+        return result
+    # for subj in true_subject:
+    #     if message_subject == 'Портал Росреестра: заявление выполнено  (45-3819900)':
+    #         print("ok")
+    #     print(message_subject)
+    #     if subj in message_subject:
+    #         break
+    #     else:
 
     # не очень красивые регулярки, увы
     application_number = re.search('\(\S+\)', str(message_subject))
@@ -632,7 +656,8 @@ def calculate_new_files_in_dir(old_files_list, path):
 
 def main():
     email, password = arguments.email, arguments.password
-    log_dst = f'./log/{email}.txt'
+    log_dst = os.path.join(os.path.dirname(__file__), f'log\\{email}.txt')
+    print(log_dst)
     if os.path.isfile(log_dst):
         log_file = open(log_dst, 'a')
     else:
@@ -641,6 +666,17 @@ def main():
     log_file.write('\n')
     log_file.write(f'{datetime.datetime.now()}: {email}: начинаем работу\n')
     log_file.flush()
+
+    rosreestr_number = arguments.number
+    if rosreestr_number:
+        rosreestr_number = rosreestr_number.split(',')
+
+    IMAPS_EMAIL = {
+        'yandex': 'imap.yandex.ru',
+        'mail': 'imap.mail.ru',
+        'ya': 'imap.ya.ru'
+    }
+
     if email is not None and password is not None:
         time_format = '%Y-%m-%d'
         if arguments.from_date is not None:
@@ -661,7 +697,15 @@ def main():
 
         else:
             to_date = None
-        imap_session = ImapSession(email, password, 'imap.yandex.ru', 993)
+
+        current_domin = [(k, v) for (k, v) in IMAPS_EMAIL.items() if k in email]
+
+        if not current_domin:
+            print("i dont know this is domain {}".format(email))
+
+        current_domin, current_imap = current_domin[0]
+
+        imap_session = ImapSession(email, password, current_imap, 993, current_domin)
         if out_dir is not None:
             if not os.path.isdir(out_dir):
                 print(colored(f'Каталог для загрузки файлов не найден, создаём каталог {out_dir}', color='yellow'))
@@ -670,44 +714,62 @@ def main():
             print(colored('Не указан каталог для загрузки файлов!', color='red'))
             sys.exit(1)
         if imap_session.connect():
-            if imap_session.move_to_folder('inbox'):
-                if imap_session.load_messages(unread=arguments.only_unread,
-                                              read=arguments.only_read,
-                                              to_date=to_date,
-                                              from_date=from_date,
-                                              from_addr=email_from):
-                    if len(imap_session.ids_messages) > 1:
-                        browser = start_browser(out_dir)
-                        for message_id in imap_session.ids_messages:
-                            if imap_session.load_message(message_id):
-                                result = parse_message(imap_session.html_message,
-                                                       imap_session.subject)
-                                for piece in result.keys():
-                                    if result[piece] is None:
-                                        print('Не удалось распарсить сообщение')
-                                        break
+            try:
+                if imap_session.move_to_folder('inbox'):
+                    if imap_session.load_messages(unread=arguments.only_unread,
+                                                  read=arguments.only_read,
+                                                  to_date=to_date,
+                                                  from_date=from_date,
+                                                  from_addr=email_from):
+                        if len(imap_session.ids_messages) > 1:
+                            browser = start_browser(out_dir)
+                            try:
+                                for pos_i, message_id in enumerate(imap_session.ids_messages):
+                                    log_file.write(f"----------------------- \n")
+                                    log_file.write(f"{pos_i} \n")
+                                    if imap_session.load_message(message_id):
+                                        result = parse_message(imap_session.html_message,
+                                                               imap_session.subject)
+                                        for piece in result.keys():
+                                            if result[piece] is None:
+                                                print('Не удалось распарсить сообщение')
+                                                break
+                                        else:
+                                            print(colored(f'{email}: сообщение обработано, данные: ', color='cyan'))
+                                            print(f'''
+              Номер заявления: {colored(result["application_number"], color="green")}, 
+              дата регистрации: {colored(result["reg_date"], color="green")}, 
+              ссылка для доступа: {colored(result["download_url"], color="green")}, 
+              ключ для доступа: {colored(result["key"], color="green")}
+                                                      ''')
+
+                                            # processing  only exactly
+                                            if rosreestr_number and not result[
+                                                                            "application_number"] in rosreestr_number:
+                                                continue
+                                            new_file = parse_link(browser, result, email)
+                                            if new_file is not None:
+                                                print(colored(f'{email}: загружен файл {new_file}'))
+                                                # log_file.write(
+                                                #     f'{str(datetime.datetime.now())},{email},{result["application_number"]},{result["reg_date"]},{result["download_url"]},{result["key"]},{out_dir + "/" + new_file}\n')
+                                                # log_file.flush()
+
+                                            else:
+                                                print(colored(f'{email}: не удалось обработать ссылку', color='red'))
+                                                log_file.write(
+                                                    f'не удалось загрузит файл {email}  {result["application_number"]} \n')
+                                                log_file.flush()
                                 else:
-                                    print(colored(f'{email}: сообщение обработано, данные: ', color='cyan'))
-                                    print(f'''
-      Номер заявления: {colored(result["application_number"], color="green")}, 
-      дата регистрации: {colored(result["reg_date"], color="green")}, 
-      ссылка для доступа: {colored(result["download_url"], color="green")}, 
-      ключ для доступа: {colored(result["key"], color="green")}
-                                              ''')
-
-                                    new_file = parse_link(browser, result, email)
-                                    if new_file is not None:
-                                        print(colored(f'{email}: загружен файл {new_file}'))
-                                        log_file.write(f'{str(datetime.datetime.now())},{email},{result["application_number"]},{result["reg_date"]},{result["download_url"]},{result["key"]},{out_dir + "/" + new_file}\n')
-                                        log_file.flush()
-
-                                    else:
-                                        print(colored(f'{email}: не удалось обработать ссылку', color='red'))
-
-
-                    browser.quit()
-                    imap_session.logout()
-                    log_file.close()
+                                    print('===========END============')
+                            except Exception as e:
+                                print(e)
+                            finally:
+                                browser.quit()
+            except Exception as e:
+                print(e)
+            finally:
+                imap_session.logout()
+                log_file.close()
 
 
 if __name__ == '__main__':
