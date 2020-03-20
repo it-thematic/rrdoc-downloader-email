@@ -213,6 +213,8 @@ class ImapSession:
                 code, messages = self.connection.search(None, 'ALL')
             else:
                 code, messages = self.connection.search(None, ' '.join(commands))
+                if code != 'OK':  #  this bump  for email like @ya.ru
+                    code, messages = self.connection.search(None, 'ALL')
         except Exception as error:
             message = f'{self.email}: произошла ошибка при поиске непрочитанных писем, подробная информация: {error}'
             print(colored(message, color='red'))
