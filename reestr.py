@@ -13,6 +13,7 @@ import tempfile
 import time
 import uuid
 from email.header import decode_header
+from pathlib import Path
 
 import bs4
 from python_rucaptcha import ImageCaptcha
@@ -22,8 +23,8 @@ from selenium.webdriver.firefox.options import Options
 from termcolor import colored
 
 from dotenv import load_dotenv
-
-load_dotenv()
+env_path = Path(__file__).parent.absolute()/'1.env'
+load_dotenv(dotenv_path=env_path)
 
 BASE_DIR = os.path.dirname(os.path.realpath(__file__))
 
@@ -429,7 +430,7 @@ def start_browser(download_path):
     options.set_preference("browser.download.folderList", 2)
     options.set_preference("browser.download.manager.showWhenStarting", False)
     options.set_preference("browser.download.dir", download_path)
-    if sys.platform != 'win32':
+    if sys.platform == 'win32':
         options.set_preference("browser.helperApps.neverAsk.saveToDisk",
                            "application/octet-stream,application/vnd.ms-excel,application/zip,application/x-zip-compressed")
         browser = webdriver.Firefox(options=options, executable_path='c:\\GECKoDRIVER\\geckodriver.exe')
