@@ -681,7 +681,8 @@ def main():
     IMAPS_EMAIL = {
         'yandex': 'imap.yandex.ru',
         'mail': 'imap.mail.ru',
-        'ya': 'imap.ya.ru'
+        'ya': 'imap.ya.ru',
+        'comp-tech': 'imap.mail.ru',
     }
 
     if email is not None and password is not None:
