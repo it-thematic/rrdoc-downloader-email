@@ -15,7 +15,7 @@ import uuid
 from email.header import decode_header
 from pathlib import Path
 
-import bs4
+from bs4 import *
 from python_rucaptcha import ImageCaptcha
 from selenium import webdriver
 from selenium.webdriver.firefox.firefox_binary import FirefoxBinary
@@ -403,7 +403,7 @@ class ImapSession:
                         return False
 
                     else:
-                        self.html_message = bs4.BeautifulSoup(self.html_message, features="html.parser")
+                        self.html_message = BeautifulSoup(self.html_message, features="html.parser")
 
                     try:
                         self.subject = decode_header(self.message.get('Subject'))[0][0].decode('utf-8')
