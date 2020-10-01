@@ -592,17 +592,19 @@ def parse_message(message_body, message_subject):
         # ключ доступа
         'key': None
     }
-    true_subject = ['документ по заявлению', 'заявление выполнено']
-    if not true_subject[0] in message_subject and true_subject[1] in message_subject:
-        print(colored('Не используем это сообщение, не соответствует запросу', color='yellow'))
+    true_subject = ['Портал Росреестра: заявление выполнено'] # is good
+    if not true_subject[0] in message_subject: #  and true_subject[1] in message_subject
+        print(colored('Не используем это сообщение, не соответствует запросу {}'.format(message_subject), color='yellow'))
         return result
+    else:
+        print(colored('Ура искомый формат {}'.format(message_subject), color='green'))
     # for subj in true_subject:
     #     if message_subject == 'Портал Росреестра: заявление выполнено  (45-3819900)':
     #         print("ok")
     #     print(message_subject)
     #     if subj in message_subject:
     #         break
-    #     else:
+    #     else:Портал Росреестра: документ по заявлению
 
     # не очень красивые регулярки, увы
     application_number = re.search('\(\S+\)', str(message_subject))
@@ -685,6 +687,7 @@ def main():
         'mail': 'imap.mail.ru',
         'ya': 'imap.ya.ru',
         'comp-tech': 'imap.mail.ru',
+        'rrdoc': 'imap.mail.ru',
     }
 
     if email is not None and password is not None:

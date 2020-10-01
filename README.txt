@@ -34,7 +34,7 @@
 # Uses
 
 ```
-
+python reestr.py --email --password --out_dir
 
 --email        help='Почта'
 --password     help='Пароль для почты'
@@ -52,3 +52,7 @@
 Если ни один из параметров --only-read или --only-unread не указан, то будет обрабатываться вся почта''',
 Если даты --from_date --to_date  не будут указаны, обрабатываться будет вся почта
 ```
+
+
+#  Use on windows
+
