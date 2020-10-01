@@ -201,8 +201,8 @@ class ImapSession:
         if to_date is not None:
             commands.append(f'(BEFORE "{str(to_date)}")')
         '''
-        if from_addr is not None:
-            commands.append(f'(FROM "{from_addr}")')
+        # if from_addr is not None:
+        #     commands.append(f'(FROM "{from_addr}")')
 
         self.ids_messages.clear()
 
@@ -399,7 +399,7 @@ class ImapSession:
                         self.html_message = self.message.get_payload(0).get_payload(1).get_payload(decode=True).decode(
                             'utf-8')
                     except:
-                        print(f'{self.email}: не удалось распарсить тело сообщения')
+                        # print(f'{self.email}: не удалось распарсить тело сообщения')
                         return False
 
                     else:
